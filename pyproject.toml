@@ -1,0 +1,17 @@
+[project]
+name = "gmtsar-py"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "bhawiyuga", email = "adhitya.bhawiyuga@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+gmtsar-py = "gmtsar_py:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

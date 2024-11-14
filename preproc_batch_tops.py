@@ -4,10 +4,20 @@ import subprocess
 import glob
 import datetime
 
+def do_delete(file):
+    if os.path.exists(file):
+        os.remove(file)
+
 def run_command(command):
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    print(f"COMMAND: {command}")
     output, error = process.communicate()
-    return output.decode('utf-8'), error.decode('utf-8')
+    decoded_output = output.decode()
+    decoded_error = error.decode()
+    print(decoded_output)
+    print(decoded_error)
+    decoded_output = decoded_output.replace("\n", "")
+    return decoded_output
 
 def print_usage():
     print("""
@@ -59,7 +69,8 @@ mmaster = f"S1_{first_line.split(':')[0][15:23]}_ALL_F{first_line.split(':')[0][
 
 # OK Clean up
 for file in glob.glob("*.PRM*") + glob.glob("*.SLC") + glob.glob("*.LED") + glob.glob("tmp*"):
-    os.remove(file)
+    if os.path.exists(file):
+        os.remove(file)
 
 if mode == 1:
     if os.path.exists("baseline_table.dat"):
@@ -91,8 +102,8 @@ with open(data_in, 'r') as f:
             run_command(f"baseline_table.csh {mmaster}.PRM {m_stem_master}.PRM GMT >> table.gmt")
 
             # OK Clean up
-            os.remove("junk1")
-            os.remove("junk2")
+            do_delete("junk1")
+            do_delete("junk2")
 
         elif mode == 2:
             # Mode 2: Stitch and align all the images
@@ -129,19 +140,30 @@ with open(data_in, 'r') as f:
                     run_command(f"ext_orb_s1a {stem}.PRM {orbit} {stem}")
 
                     # OK Compute time difference and shift
-                    t1 = float(run_command(f"grep clock_start {stem_master}.PRM | grep -v SC_clock_start")[0].split()[2])
-                    t2 = float(run_command(f"grep clock_start {stem}.PRM | grep -v SC_clock_start")[0].split()[2])
-                    prf = float(run_command(f"grep PRF {stem_master}.PRM")[0].split()[2])
-                    nl = int((t2 - t1) * prf * 86400.0 + 0.2)
+                    t1 = run_command(f"grep clock_start {stem_master}.PRM | grep -v SC_clock_start | awk '{{printf(\"%.13f\", $3)}}'")
+                    t2 = run_command(f"grep clock_start {stem}.PRM | grep -v SC_clock_start | awk '{{printf(\"%.13f\", $3)}}'")
+                    prf = run_command(f"grep PRF {stem_master}.PRM | awk '{{printf(\"%.6f\",$3)}}'")
+                    nl = run_command(f"echo {t1} {t2} {prf} | awk '{{printf(\"%d\",($2 - $1)*$3*86400.0+0.2)}}'")
 
                     print(f"Shifting the master PRM by {nl} lines...")
                     run_command(f"cp {master}.PRM tmp.PRM")
 
                     # OK Update PRM file with shifted times
-                    for param in ['clock_start', 'clock_stop', 'SC_clock_start', 'SC_clock_stop']:
-                        old_time = float(run_command(f"grep {param} tmp.PRM")[0].split()[2])
-                        new_time = old_time + nl / prf / 86400.0
-                        run_command(f"update_PRM tmp.PRM {param} {new_time:.12f}")
+                    # For clock_start
+                    ttmp = run_command(f"grep clock_start tmp.PRM | grep -v SC_clock_start | awk '{{print $3}}' | awk '{{printf (\"%.12f\",$1 + {nl}/{prf}/86400.0)}}'")
+                    run_command(f"update_PRM tmp.PRM clock_start {ttmp}")
+
+                    # For clock_stop
+                    ttmp = run_command(f"grep clock_stop tmp.PRM | grep -v SC_clock_stop | awk '{{print $3}}' | awk '{{printf (\"%.12f\",$1 + {nl}/{prf}/86400.0)}}'")
+                    run_command(f"update_PRM tmp.PRM clock_stop {ttmp}")
+
+                    # For SC_clock_start
+                    ttmp = run_command(f"grep SC_clock_start tmp.PRM | awk '{{print $3}}' | awk '{{printf (\"%.12f\",$1 + {nl}/{prf}/86400.0)}}'")
+                    run_command(f"update_PRM tmp.PRM SC_clock_start {ttmp}")
+
+                    # For SC_clock_stop
+                    ttmp = run_command(f"grep SC_clock_stop tmp.PRM | awk '{{print $3}}' | awk '{{printf (\"%.12f\",$1 + {nl}/{prf}/86400.0)}}'")
+                    run_command(f"update_PRM tmp.PRM SC_clock_stop {ttmp}")
 
                     # OK Compute image offset
                     if tmp_da == 0:
@@ -153,17 +175,22 @@ with open(data_in, 'r') as f:
                         run_command(f"calc_dop_orb junk2.PRM junk {earth_radius} 0")
                         run_command("cat junk >> junk2.PRM")
                         
-                        lontie = float(run_command("SAT_baseline junk1.PRM junk2.PRM | grep lon_tie_point")[0].split()[2])
-                        lattie = float(run_command("SAT_baseline junk1.PRM junk2.PRM | grep lat_tie_point")[0].split()[2])
+                        lontie = run_command("SAT_baseline junk1.PRM junk2.PRM | grep lon_tie_point | awk '{print $3}'")
+                        lattie = run_command("SAT_baseline junk1.PRM junk2.PRM | grep lat_tie_point | awk '{print $3}'")
                         
-                        tmp_am = float(run_command(f"echo {lontie} {lattie} 0 | SAT_llt2rat tmp.PRM 1")[0].split()[1])
-                        tmp_as = float(run_command(f"echo {lontie} {lattie} 0 | SAT_llt2rat {stem}.PRM 1")[0].split()[1])
-                        tmp_da = int(tmp_as - tmp_am)
+                        tmp_am = run_command(f"echo {lontie} {lattie} 0 | SAT_llt2rat tmp.PRM 1 | awk '{{print $2}}'")
+                        tmp_as = run_command(f"echo {lontie} {lattie} 0 | SAT_llt2rat {stem}.PRM 1 | awk '{{print $2}}'")
+                        tmp_da = run_command(f"echo {tmp_am} {tmp_as} | awk '{{printf(\"%d\",$2-$1)}}'")
                         
-                        os.remove("junk1.PRM")
-                        os.remove("junk2.PRM")
-                        os.remove("junk")
-
+                        do_delete("junk1.PRM")
+                        do_delete("junk2.PRM")
+                        do_delete("junk")
+                    
+                    print(f"tmp_da value: {tmp_da}")
+                    try:
+                        tmp_da = float(tmp_da)
+                    except ValueError as e:
+                        raise ValueError(f"Error converting tmp_da value to float: {e}")
                     # OK Handle large offsets
                     if -1000 < tmp_da < 1000:
                         run_command(f"cp tmp.PRM junk1")
@@ -172,8 +199,8 @@ with open(data_in, 'r') as f:
                         run_command(f"cp {stem}.PRM junk1")
                         run_command(f"calc_dop_orb junk1 junk2 {earth_radius} 0")
                         run_command(f"cat junk1 junk2 > {stem}.PRM")
-                        os.remove("junk1")
-                        os.remove("junk2")
+                        do_delete("junk1")
+                        do_delete("junk2")
 
                         run_command("SAT_llt2rat tmp.PRM 1 < topo.llt > tmpm.dat")
                         run_command(f"SAT_llt2rat {stem}.PRM 1 < topo.llt > tmp1.dat")
@@ -200,8 +227,8 @@ with open(data_in, 'r') as f:
 
                     # OK get r, dr, a, da, SNR table to be used by fitoffset.csh
                     run_command("paste tmpm.dat tmp1.dat | awk '{printf(\"%.6f %.6f %.6f %.6f %d\\n\", $1, $6 - $1, $2, $7 - $2, 100)}' > tmp.dat")
-                    rmax = int(run_command(f"grep num_rng_bins {stem}.PRM")[0].split()[2])
-                    amax = int(run_command(f"grep num_lines {stem}.PRM")[0].split()[2])
+                    rmax = run_command(f"grep num_rng_bins {stem}.PRM | awk '{{print $3}}'")
+                    amax = run_command(f"grep num_lines {stem}.PRM | awk '{{print $3}}'")
                     run_command(f"awk '{{if($1 > 0 && $1 < {rmax} && $3 > 0 && $3 < {amax}) print $0 }}' < tmp.dat > offset.dat")
 
                     # OK Prepare offset data
@@ -273,7 +300,7 @@ with open(data_in, 'r') as f:
             run_command(f"cp {stem}.PRM junk1")
             if sl == 1:
                 run_command("calc_dop_orb junk1 junk2 0 0")
-                earth_radius = float(run_command("grep earth_radius junk2")[0].split()[2])
+                earth_radius = run_command("grep earth_radius junk2 | awk '{print $3}'")
             else:
                 run_command(f"calc_dop_orb junk1 junk2 {earth_radius} 0")
             run_command(f"cat junk1 junk2 > {stem}.PRM")
